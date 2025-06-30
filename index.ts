@@ -15,22 +15,20 @@ const SPAM_CONTRACT_ABI = [
 
 async function main() {
   const args = process.argv.slice(2)
-  const tpb = parseInt(args[0] || '5') // transactions per block
+  const acpb = parseInt(args[0] || '5') // account creations per block
   const nb = parseInt(args[1] || '2')  // number of blocks
 
   const privateKey = process.env.PRIVATE_KEY as `0x${string}`
   const spamContract = process.env.SPAM_CONTRACT as `0x${string}`
 
   if (!privateKey || !spamContract) {
-    console.error('Usage: bun run index.ts <tpb> <nb>')
-    console.error('tpb = transactions per block, nb = number of blocks')
+    console.error('Usage: bun run index.ts <acpb> <nb>')
+    console.error('acpb = account creations per block, nb = number of blocks')
     console.error('Set PRIVATE_KEY and SPAM_CONTRACT in .env file or environment variable')
     process.exit(1)
   }
 
-  const accountsPerTx = parseInt(args[2] || '100') // accounts per transaction
-  const totalAccounts = tpb * nb * accountsPerTx
-
+  const totalAccounts = acpb * nb
   console.log(`Generating ${totalAccounts} new target addresses...`)
   const targetAccounts = Array.from({ length: totalAccounts }, () => {
     const newPrivateKey = generatePrivateKey()
@@ -39,7 +37,7 @@ async function main() {
   })
 
   console.log(`Generated ${targetAccounts.length} new addresses`)
-  console.log(`Will send ${tpb} transactions per block for ${nb} blocks (${accountsPerTx} accounts per tx)`)
+  console.log(`Will send ${acpb} account creations per block for ${nb} blocks`)
 
   const account = privateKeyToAccount(privateKey)
 
@@ -50,7 +48,7 @@ async function main() {
 
   const wsClient = createPublicClient({
     chain: baseSepolia,
-    transport: webSocket('wss://sepolia.base.org')
+    transport: webSocket('wss://base-sepolia-rpc.publicnode.com')
   })
 
   const spamContractInstance = getContract({
@@ -65,37 +63,40 @@ async function main() {
   let numBlocksProcessed = 0;
   let nonce = await publicClient.getTransactionCount({ address: account.address })
 
-  const unwatch = wsClient.watchBlockNumber({
+  wsClient.watchBlockNumber({
+    onError: (error) => {
+      console.error('Error watching block number:', error)
+      process.exit(1)
+    },
     onBlockNumber: async (_bn: bigint) => {
+      console.log(`Processing block ${numBlocksProcessed + 1}/${nb}...`)
       const tx = await spamContractInstance.write.createAccounts([targetAccounts.map((t) => t.address)], {
         value: BigInt(targetAccounts.length),
         account: account,
         nonce,
       });
+      console.log({ tx });
       allHashes.push(tx);
 
       nonce++;
       numBlocksProcessed++;
       if (numBlocksProcessed >= nb) {
-        unwatch()
+        console.log('\nTransaction spam completed')
+
+        const outputFileName = `output/output-${Date.now()}.json`
+        const output = {
+          hashes: allHashes,
+          targetAccounts,
+          acpb,
+          nb,
+        }
+
+        writeFileSync(outputFileName, JSON.stringify(output, null, 2))
+        console.log(`Results saved to ${outputFileName}`)
+        process.exit(0)
       }
     }
   })
-
-  console.log('\nTransaction spam completed')
-
-  const outputFileName = `output/output-${Date.now()}.json`
-  const output = {
-    hashes: allHashes,
-    targetAccounts,
-    tpb,
-    nb,
-    accountsPerTx,
-    totalAccounts
-  }
-
-  writeFileSync(outputFileName, JSON.stringify(output, null, 2))
-  console.log(`Results saved to ${outputFileName}`)
 }
 
 main().catch(console.error)
