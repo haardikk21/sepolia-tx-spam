@@ -56,19 +56,20 @@ async function main() {
 
   const unwatch = wsClient.watchBlockNumber({
     onBlockNumber: async (_bn: bigint) => {
-      const blockHashes = [];
+      const blockHashPromises = [];
       // Send tpb transactions quickly
       for (const target of targetAccounts) {
-        const hash = await walletClient.sendTransaction({
+        const hashPromise = walletClient.sendTransaction({
           to: target.address,
           value: amount,
           nonce,
         })
 
         nonce++;
-        blockHashes.push(hash)
+        blockHashPromises.push(hashPromise);
       }
 
+      const blockHashes = await Promise.all(blockHashPromises);
       allHashes.push(...blockHashes)
       numBlocksProcessed++;
 
