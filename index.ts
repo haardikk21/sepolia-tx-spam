@@ -1,7 +1,17 @@
-import { createWalletClient, createPublicClient, http, webSocket } from 'viem'
-import { privateKeyToAccount, generatePrivateKey } from 'viem/accounts'
-import { baseSepolia } from 'viem/chains'
 import { writeFileSync } from 'fs'
+import { createPublicClient, getContract, http, webSocket } from 'viem'
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts'
+import { baseSepolia } from 'viem/chains'
+
+const SPAM_CONTRACT_ABI = [
+  {
+    "type": "function",
+    "name": "createAccounts",
+    "inputs": [{ "name": "accounts", "type": "address[]" }],
+    "outputs": [],
+    "stateMutability": "payable"
+  }
+] as const
 
 async function main() {
   const args = process.argv.slice(2)
@@ -9,26 +19,27 @@ async function main() {
   const nb = parseInt(args[1] || '2')  // number of blocks
 
   const privateKey = process.env.PRIVATE_KEY as `0x${string}`
+  const spamContract = process.env.SPAM_CONTRACT as `0x${string}`
 
-  if (!privateKey) {
+  if (!privateKey || !spamContract) {
     console.error('Usage: bun run index.ts <tpb> <nb>')
     console.error('tpb = transactions per block, nb = number of blocks')
-    console.error('Set PRIVATE_KEY in .env file or environment variable')
+    console.error('Set PRIVATE_KEY and SPAM_CONTRACT in .env file or environment variable')
     process.exit(1)
   }
 
-  const amount = 1n // 1 wei
-  const totalTxs = tpb * nb
+  const accountsPerTx = parseInt(args[2] || '100') // accounts per transaction
+  const totalAccounts = tpb * nb * accountsPerTx
 
-  console.log(`Generating ${totalTxs} new target addresses...`)
-  const targetAccounts = Array.from({ length: totalTxs }, () => {
+  console.log(`Generating ${totalAccounts} new target addresses...`)
+  const targetAccounts = Array.from({ length: totalAccounts }, () => {
     const newPrivateKey = generatePrivateKey()
     const newAccount = privateKeyToAccount(newPrivateKey)
     return { privateKey: newPrivateKey, address: newAccount.address }
   })
 
   console.log(`Generated ${targetAccounts.length} new addresses`)
-  console.log(`Will send ${tpb} transactions per block for ${nb} blocks`)
+  console.log(`Will send ${tpb} transactions per block for ${nb} blocks (${accountsPerTx} accounts per tx)`)
 
   const account = privateKeyToAccount(privateKey)
 
@@ -42,10 +53,10 @@ async function main() {
     transport: webSocket('wss://sepolia.base.org')
   })
 
-  const walletClient = createWalletClient({
-    account,
-    chain: baseSepolia,
-    transport: http('https://sepolia.base.org')
+  const spamContractInstance = getContract({
+    abi: SPAM_CONTRACT_ABI,
+    address: spamContract,
+    client: publicClient
   })
 
   console.log(`\nStarting transaction spam on Base Sepolia...`)
@@ -56,23 +67,15 @@ async function main() {
 
   const unwatch = wsClient.watchBlockNumber({
     onBlockNumber: async (_bn: bigint) => {
-      const blockHashPromises = [];
-      // Send tpb transactions quickly
-      for (const target of targetAccounts) {
-        const hashPromise = walletClient.sendTransaction({
-          to: target.address,
-          value: amount,
-          nonce,
-        })
+      const tx = await spamContractInstance.write.createAccounts([targetAccounts.map((t) => t.address)], {
+        value: BigInt(targetAccounts.length),
+        account: account,
+        nonce,
+      });
+      allHashes.push(tx);
 
-        nonce++;
-        blockHashPromises.push(hashPromise);
-      }
-
-      const blockHashes = await Promise.all(blockHashPromises);
-      allHashes.push(...blockHashes)
+      nonce++;
       numBlocksProcessed++;
-
       if (numBlocksProcessed >= nb) {
         unwatch()
       }
@@ -86,7 +89,9 @@ async function main() {
     hashes: allHashes,
     targetAccounts,
     tpb,
-    nb
+    nb,
+    accountsPerTx,
+    totalAccounts
   }
 
   writeFileSync(outputFileName, JSON.stringify(output, null, 2))
