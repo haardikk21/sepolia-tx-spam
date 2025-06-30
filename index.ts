@@ -30,13 +30,13 @@ async function main() {
 
   const totalAccounts = acpb * nb
   console.log(`Generating ${totalAccounts} new target addresses...`)
-  const targetAccounts = Array.from({ length: totalAccounts }, () => {
+  const allAccounts: { privateKey: `0x${string}`, address: `0x${string}` }[][] = new Array(nb).fill(Array.from({ length: acpb }, () => {
     const newPrivateKey = generatePrivateKey()
     const newAccount = privateKeyToAccount(newPrivateKey)
     return { privateKey: newPrivateKey, address: newAccount.address }
-  })
+  }))
 
-  console.log(`Generated ${targetAccounts.length} new addresses`)
+  console.log(`Generated ${totalAccounts} new addresses`)
   console.log(`Will send ${acpb} account creations per block for ${nb} blocks`)
 
   const account = privateKeyToAccount(privateKey)
@@ -70,13 +70,24 @@ async function main() {
     },
     onBlockNumber: async (_bn: bigint) => {
       console.log(`Processing block ${numBlocksProcessed + 1}/${nb}...`)
-      const tx = await spamContractInstance.write.createAccounts([targetAccounts.map((t) => t.address)], {
-        value: BigInt(targetAccounts.length),
-        account: account,
-        nonce,
-      });
-      console.log({ tx });
-      allHashes.push(tx);
+      try {
+        const targetAccounts = allAccounts[numBlocksProcessed]!;
+        const tx = await spamContractInstance.write.createAccounts([targetAccounts.map((t) => t.address)], {
+          value: BigInt(targetAccounts.length),
+          account: account,
+          nonce,
+        });
+        console.log({ tx });
+        allHashes.push(tx);
+
+      } catch (e) {
+        console.error('Error sending transaction:', e)
+        if (e instanceof Error && e.message.includes('nonce too low')) {
+          console.log('Nonce too low, waiting for next block...')
+          return
+        }
+        throw e
+      }
 
       nonce++;
       numBlocksProcessed++;
@@ -86,7 +97,7 @@ async function main() {
         const outputFileName = `output/output-${Date.now()}.json`
         const output = {
           hashes: allHashes,
-          targetAccounts,
+          allAccounts,
           acpb,
           nb,
         }
