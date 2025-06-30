@@ -72,14 +72,20 @@ async function main() {
       console.log(`Processing block ${numBlocksProcessed + 1}/${nb}...`)
       try {
         const targetAccounts = allAccounts[numBlocksProcessed]!;
-        const tx = await spamContractInstance.write.createAccounts([targetAccounts.map((t) => t.address)], {
-          value: BigInt(targetAccounts.length),
-          account: account,
-          nonce,
-        });
-        console.log({ tx });
-        allHashes.push(tx);
-
+        const chunkedAccounts = chunk(targetAccounts, 500)
+        const hashPromises = [];
+        for (const chunk of chunkedAccounts) {
+          console.log(`Sending transaction for ${chunk.length} accounts with nonce ${nonce}...`)
+          const txPromise = spamContractInstance.write.createAccounts([chunk.map((t) => t.address)], {
+            value: BigInt(chunk.length),
+            account: account,
+            nonce,
+          });
+          hashPromises.push(txPromise);
+          nonce++;
+        }
+        const txs = await Promise.all(hashPromises);
+        allHashes.push(...txs);
       } catch (e) {
         console.error('Error sending transaction:', e)
         if (e instanceof Error && e.message.includes('nonce too low')) {
@@ -89,7 +95,6 @@ async function main() {
         throw e
       }
 
-      nonce++;
       numBlocksProcessed++;
       if (numBlocksProcessed >= nb) {
         console.log('\nTransaction spam completed')
@@ -108,6 +113,17 @@ async function main() {
       }
     }
   })
+}
+
+function chunk<T>(array: T[], size: number): T[][] {
+  return array.reduce((acc, item, index) => {
+    const chunkIndex = Math.floor(index / size)
+    if (!acc[chunkIndex]) {
+      acc[chunkIndex] = []
+    }
+    acc[chunkIndex].push(item)
+    return acc
+  }, [] as T[][])
 }
 
 main().catch(console.error)
